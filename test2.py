@@ -4,6 +4,7 @@ import glob
 import os
 from PIL import ImageFont, ImageDraw, Image
 import math
+import operator
 
 TYPE_RED = True #定义是否红方
 
@@ -28,7 +29,7 @@ class Chess():
         self.x = x
         self.y = y
     def __repr__(self):
-        return f"({self.name}, {self.reallyX}, {self.reallyY})"
+        return f"({self.name}, {self.reallyX}, {self.reallyY}, {self.x}, {self.y})"
 
 # 上方 所有棋子
 baseTopChessList = []
@@ -68,18 +69,20 @@ baseBottomChessList.append(Chess("红兵", 6, 4))
 baseBottomChessList.append(Chess("红兵", 6, 6))
 baseBottomChessList.append(Chess("红兵", 6, 8))
 
-redChessList = []
-blacChessList = []
+chessList = [] #本次识别到的棋子
+lastChessList = []
 
-lastRedChessList = []
-lastBlacChessList = []
+chessMatri =  [[0] * 10 for _ in range(9)] #本次识别到的棋子矩阵
+lastChessMatri =  [[0] * 10 for _ in range(9)] #本次识别到的棋子矩阵
 
 def resizeToPosX(x):
-    chessSize = 8*x/CHESS_WIDTH
+    #(2*x+1)*radius = y;
+    
+    chessSize = (x/CHESS_MAX_RADIUS-1)/2
     return math.floor(chessSize)
 
 def resizeToPosY(y):
-    chessSize = 10*y/CHESS_HEIGHT
+    chessSize = (y/CHESS_MAX_RADIUS-1)/2
     return math.floor(chessSize)
 
 def cv2ImgAddText(img, text, left, top, textColor=(0, 255, 0), textSize=20):
@@ -157,60 +160,26 @@ def saveChessCutImg(chessList,x,y,r,circle_image):
             img = circle_image[y:y+height, x:x+width]
             cv.imwrite(name,img)
 
-def recognizeRed(x,y,r,image):
-    # 圆形区域的中心坐标和半径
-    center = (x, y)
-    radius = r
+      
+def create_matrix(chess_list):
+    matrix = [["空" for _ in range(9)] for _ in range(8)]  # 创建一个空的 8x9 矩阵
 
-    # 获取圆形区域的图像副本
-    circle_image = image[center[1]-radius:center[1]+radius, center[0]-radius:center[0]+radius].copy()
+    for chess in chess_list:
+        x = chess.x
+        y = chess.y
+        matrix[x][y] = chess.name  # 根据 Chess 对象的 x 和 y 值在矩阵中设置标志为 1
 
+    return matrix
 
-    hsv_circle = cv.cvtColor(circle_image, cv.COLOR_BGR2HSV)
-
-    # 定义红色的色调范围
-    lower_red1 = np.array([0, 70, 50])
-    upper_red1 = np.array([10, 255, 255])
-    lower_red2 = np.array([170, 70, 50])
-    upper_red2 = np.array([180, 255, 255])
-
-    # 使用颜色阈值分割提取红色区域
-    red_mask1 = cv.inRange(hsv_circle, lower_red1, upper_red1)
-    red_mask2 = cv.inRange(hsv_circle, lower_red2, upper_red2)
-    red_mask = cv.bitwise_or(red_mask1, red_mask2)
-
-    # 计算红色区域的像素比例
-    red_pixel_ratio = np.count_nonzero(red_mask) / (red_mask.shape[0] * red_mask.shape[1])
-
-    # 设置红色像素比例阈值
-    red_ratio_threshold = 0.2
-    position = [resizeToPosX(x), resizeToPosY(y)]
-    #print("找到棋子reallyX {} reallyY {} resizeToPosX {} resizeToPosY {}".format(x,y,position[0],position[1]))
-    if red_pixel_ratio > red_ratio_threshold:
-        redChess = Chess("红棋子",position[0],position[1])
-        redChess.reallyX = x
-        redChess.reallyY = y
-        redChessList.append(redChess)
-    else:
-        blackChess = Chess("黑棋子",position[0],position[1])
-        blackChess.reallyX = x
-        blackChess.reallyY = y
-        blacChessList.append(blackChess)
-        
-
-    # 判断圆形区域是否包含红色
-    if red_pixel_ratio > red_ratio_threshold:
-       # print("圆形区域包含红色")
-        return True
-    else:
-       # print("圆形区域不包含红色")
-        return False
-        
+def print_matrix(matrix):
+    for row in matrix:
+        row_str = "\t".join(str(element) for element in row)
+        print(row_str)
 
 def recognize(image):
     # 读取图像
     # 将图像转换为灰度
-    gray = cv.cvtColor(image, cv.COLOR_BGR2GRAY)
+    #gray = cv.cvtColor(image, cv.COLOR_BGR2GRAY)
     print("每个棋子的半径",CHESS_MAX_RADIUS)
     # 需要调整的参数：dp、minDist、param1、param2、minRadius、maxRadius
     dp = 1  # 累加器分辨率与图像分辨率的倒数之比
@@ -221,38 +190,32 @@ def recognize(image):
     maxRadius = math.floor(CHESS_MAX_RADIUS*0.8)  # 圆的最大半径
 
     # 在灰度图像中检测圆形
-    circles = cv.HoughCircles(gray, cv.HOUGH_GRADIENT, dp, minDist, param1=param1, param2=param2, minRadius=minRadius, maxRadius=maxRadius)
+    circles = cv.HoughCircles(image, cv.HOUGH_GRADIENT, dp, minDist, param1=param1, param2=param2, minRadius=minRadius, maxRadius=maxRadius)
     # 确保至少检测到一个圆形
     if circles is not None:
         circles = np.round(circles[0, :]).astype(int)
 
-        lastBlacChessList.clear()
-        lastBlacChessList.extend(blacChessList)
-        lastRedChessList.clear()
-        lastRedChessList.extend(redChessList)
-
-        redChessList.clear()
-        blacChessList.clear()
+        lastChessList.clear()
+        lastChessList.extend(chessList)
+        
+        
+        lastChessMatri.clear()
+       
     
         for (x, y, r) in circles:
-                isRed = recognizeRed(x,y,r,image)
-                if isRed:
-                    cv.circle(image, (x, y), r, (0, 255, 0), 2)
-                else:
-                    cv.circle(image, (x, y), r, (255, 0, 0), 2)
+                 position = [resizeToPosX(x), resizeToPosY(y)]
+                 redChess = Chess("红",position[0],position[1])
+                 redChess.reallyX = x
+                 redChess.reallyY = y
+                 chessList.append(redChess)
+                 cv.circle(image, (x, y), r, (255, 255, 0), 5)
 
-        lastBlacChessList1 = sorted(lastBlacChessList, key=lambda c: (c.reallyX, c.reallyY))
-        lastRedChessList1 = sorted(lastRedChessList, key=lambda c: (c.reallyX, c.reallyY))
+        chessMatri = create_matrix(chessList)
 
-        redChessList1 = sorted(redChessList, key=lambda c: (c.reallyX, c.reallyY))
-        blacChessList1 = sorted(blacChessList, key=lambda c: (c.reallyX, c.reallyY))
+    
 
-        print("上次黑色棋子",lastBlacChessList1) 
-        print("上次红色棋子",lastRedChessList1)  
-         
-            
-        print("总共找到红色棋子",redChessList1)  
-        print("总共找到黑色棋子",blacChessList1)    
+        #print_matrix(lastChessMatri)
+        print_matrix(chessMatri)    
 
     return image
 
@@ -261,40 +224,52 @@ img = cv.imread('chessboard2.jpg')
 height, width, channels = img.shape
 # width/height = 9/10
 CHESS_WIDTH = width
-CHESS_MAX_RADIUS = math.floor(width/9/2)
-CHESS_HEIGHT = math.floor(width*10/9)
-CHESS_TOP = math.ceil((height-CHESS_HEIGHT)/2)
-CHESS_CUT_PATH = "cut_{}".format(CHESS_WIDTH)
-localImags = ['chessboard1.jpg','chessboard2.jpg','chessboard3.jpg']
+CHESS_MAX_RADIUS = 0
+CHESS_HEIGHT = 0
+CHESS_TOP = 0
+CHESS_CUT_PATH = ""
+localImags = ['chessboard2.jpg']
 if __name__ == '__main__':
     for path in localImags:
         img = cv.imread(path)
-        height, width, channels = img.shape
+        # 进行边界检测
+        img = cv.Canny(img, 50, 150)
+        height, width = img.shape
         # width/height = 9/10
         CHESS_WIDTH = width
         CHESS_MAX_RADIUS = math.floor(width/9/2)
-        CHESS_HEIGHT = math.floor(width*10/9)
+        CHESS_HEIGHT = math.floor(CHESS_MAX_RADIUS*10*2)
         CHESS_TOP = math.ceil((height-CHESS_HEIGHT)/2)
         CHESS_CUT_PATH = "cut_{}".format(CHESS_WIDTH)
         # 裁剪图像
         img = img[CHESS_TOP:CHESS_TOP+CHESS_HEIGHT, CHESS_LEFT:CHESS_LEFT+CHESS_WIDTH]
         #img = np.array(img)
         #img = cv.cvtColor(img, cv.COLOR_BGR2RGB)
-
+        
 
         # 识别圆的位置S
         img = recognize(img)
-        for chess in redChessList:
+        for chess in chessList:
             #print(chess.name)
-            img = cv2ImgAddText(img,chess.name, chess.reallyX,chess.reallyY,textColor=(255, 0, 0), textSize=40)
+            img = cv2ImgAddText(img,chess.name, chess.reallyX,chess.reallyY,textColor=(0, 0, 255), textSize=40)
 
-        for chess in blacChessList:
-            #print(chess.name)
-            img = cv2ImgAddText(img,chess.name, chess.reallyX,chess.reallyY,textColor=(0, 0, 0),  textSize=40)
+    
+        chessCenterX = math.floor(CHESS_WIDTH/2)
+        chessCenterY = math.floor(CHESS_HEIGHT/2)
+        cv.circle(img, (chessCenterX, chessCenterY), math.floor(CHESS_MAX_RADIUS), (255, 0, 0), 15)
+        #-8 -6 -4 -2 0 2 4 6 8 
+        #-10 -8 -6 -4 -2 0 2 4 6 8 10
+        chessRadius = CHESS_MAX_RADIUS - 15
+        for cloumn in range (0,10):
+             for row in range(0,9):
+                posX = math.floor((row-4)*2*CHESS_MAX_RADIUS+chessCenterX)
+                posY =  math.floor((cloumn-5)*2*CHESS_MAX_RADIUS+chessCenterY+CHESS_MAX_RADIUS)
+                print("位置{} {}".format(posX,posY))
+                cv.circle(img, (posX, posY),chessRadius, (255, 255, 0), 2)
         
         # 调整图像尺寸
         resized_image = cv.resize(img, (math.floor(CHESS_WIDTH/2), math.floor(CHESS_HEIGHT/2)))  # 设置目标宽度和高度
         # 显示结果图像
-        #cv.imshow('Chessboard', resized_image)
-        #cv.waitKey(0)
-        #cv.destroyAllWindows()
+        cv.imshow('Chessboard', resized_image)
+        cv.waitKey(0)
+        cv.destroyAllWindows()
